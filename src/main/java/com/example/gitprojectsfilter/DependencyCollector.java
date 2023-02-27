@@ -3,9 +3,13 @@ package com.example.gitprojectsfilter;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencsv.CSVWriter;
+import picocli.CommandLine;
+import com.example.gitprojectsfilter.Project;
 
+import javax.xml.stream.events.Comment;
 import java.io.*;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -17,14 +21,23 @@ public class DependencyCollector {
     private static HashSet<String> set;
 
 
+    @CommandLine.Option(names = {"-a",
+            "--artifact"}, paramLabel = "ARTIFACT")
+
+    static String artifact;
+
     public static void main(String[] args) {
+
+        Constants.projectList = args[1];
         List<Project> projects = readProjects(Constants.projectList);
         jarUsage = new HashMap<>();
         set = new HashSet<>();
         dependencyUsage = new HashMap<>();
 
         for (Project p : projects) {
-            String folderName = gitDownload(p);
+            String folderName =
+//                    DownloadHelper.downloadAndUnzip(p);
+                    gitDownload(p);
             if (Objects.equals(folderName, "")) continue;
             if (!getJarToCoordMap(folderName)) {
                 set.add(folderName);
@@ -128,7 +141,7 @@ public class DependencyCollector {
             writer.writeNext(data);
         }
 
-        writer = new CSVWriter(new FileWriter(Constants.outputDependencyUsageCsv));
+        writer = new CSVWriter(new FileWriter(Constants.outputDependencyUsageCsv, true));
         for (String key : dependencyUsage.keySet()) {
             Set<String> record = dependencyUsage.get(key);
             String[] recordArray = new String[record.size()];
@@ -144,7 +157,7 @@ public class DependencyCollector {
 
         StringWriter output = new StringWriter();
         CSVWriter writer = new CSVWriter(new FileWriter(
-                Constants.projectsCsv));
+                Constants.projectsCsv, true));
         for (String project : set) {
 
             writer.writeNext(new String[]{project});
@@ -160,9 +173,8 @@ public class DependencyCollector {
         Set<String> dependencies = new HashSet<>();
         boolean errorFound = false;
         try {
-            switchBranch("git for-each-ref refs/tags --sort=-taggerdate --format '%(refname:short)' | head", rootPath);
 
-            String dependencyList = execCmd("mvn dependency:list", rootPath);
+            String dependencyList = execCmd(" mvn dependency:list -T 4｜", rootPath);
             if (dependencyList == null) {
                 return true;
             }
@@ -192,11 +204,12 @@ public class DependencyCollector {
         System.out.println(rootPath + " dependency size:" + dependencies.size());
         if (dependencies.size() == 0) {
             errorFound = false;
-            System.out.println(rootPath + " switching back to master branch");
-            try {
 
-                switchBranch("git for-each-ref --sort=-committerdate refs/heads/ --format='%(refname:short)' --count=1", rootPath);
-                String dependencyList = execCmd("mvn dependency:list", rootPath);
+            try {
+//                switchBranch("git for-each-ref refs/tags --sort=-taggerdate --format '%(refname:short)' | head", rootPath);
+
+//                switchBranch("git for-each-ref --sort=-committerdate refs/heads/ --format='%(refname:short)' --count=1", rootPath);
+                String dependencyList = execCmd(" mvn dependency:list -T 4 ", rootPath);
                 if (dependencyList == null) {
                     return true;
                 }
@@ -222,6 +235,10 @@ public class DependencyCollector {
             } catch (Exception e) {
                 e.printStackTrace();
             }
+        }
+//        dependencies.clear();
+        if (dependencies.isEmpty()) {
+            DownloadHelper.deleteFile(new File(rootPath));
         }
         extractCoordinate(rootPath, dependencies);
         return errorFound;
@@ -257,7 +274,7 @@ public class DependencyCollector {
             return false;
         }
 
-        System.out.println("Latest tag: " + describeOutput);
+        System.out.println("tag: " + describeOutput);
 
         String switchCommand = "git checkout " + describeOutput.substring(1, describeOutput.length() - 1);
         Process switchProcess = Runtime.getRuntime().exec(switchCommand, null, new File(path));
@@ -272,17 +289,37 @@ public class DependencyCollector {
     }
 
     public static String execCmd(String cmd, String dir) {
-        String result = null;
+        StringBuilder result = new StringBuilder();
+        String[] command = new String[]{"/bin/sh", "-c", "mvn dependency:list -T 4 | grep 'compile\\|test'"};
 
-        String[] env = new String[]{"JAVA_HOME=" +
-                Constants.JAVA_HOME};
-        if (dir == null) return result;
-        try (InputStream inputStream = Runtime.getRuntime().exec(cmd, env, new File(dir)).getInputStream(); Scanner s = new Scanner(inputStream).useDelimiter("\\A")) {
-            result = s.hasNext() ? s.next() : null;
-        } catch (IOException e) {
+//        String[] env = new String[]{"JAVA_HOME=" +
+//                Constants.JAVA_HOME};
+
+//        if (dir == null) return result;
+//        try (InputStream inputStream = Runtime.getRuntime().exec(cmd,null, new File(dir)).getInputStream(); Scanner s = new Scanner(inputStream).useDelimiter("\\A")) {
+//            result = s.hasNext() ? s.next() : null;
+//        } catch (IOException e) {
+//            e.printStackTrace();
+//        }
+        try {
+            ProcessBuilder processBuilder = new ProcessBuilder(command);
+            processBuilder.directory(new File(dir));
+            Process process = processBuilder.start();
+            boolean b = process.waitFor(10, TimeUnit.MINUTES);
+
+            BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            String line;
+            while ((line = bufferedReader.readLine()) != null) {
+                result.append(line).append("\n");
+            }
+            if (!b) {
+                System.out.println("error");
+            }
+            process.destroy();
+        } catch (Exception e) {
             e.printStackTrace();
         }
-        return result;
+        return result.toString();
     }
 
     public static void extractCoordinate(String path, Set<String> dependencies) {
@@ -300,30 +337,6 @@ public class DependencyCollector {
 
     }
 
-    public static class Project {
-
-        String name;
-        String repoUrl;
-
-        public Project() {
-        }
-
-        public String getName() {
-            return name;
-        }
-
-        public void setName(String name) {
-            this.name = name;
-        }
-
-        public String getRepoUrl() {
-            return repoUrl;
-        }
-
-        public void setRepoUrl(String repoUrl) {
-            this.repoUrl = repoUrl;
-        }
-    }
 
 }
 
