@@ -57,20 +57,13 @@ public class DownloadHelper {
 
     public static void deleteFile(File dirFile) {
 
-        if (!dirFile.exists()) {
-            return;
+        try {
+            System.out.println("deleting " + dirFile);
+            Process process = Runtime.getRuntime().exec("rm -rf " + dirFile);
+            int exitCode = process.waitFor();
+            process.destroy();
+        } catch (Exception e) {
+            e.printStackTrace();
         }
-
-        if (dirFile.isFile()) {
-            dirFile.delete();
-            return;
-        } else {
-
-            for (File file : dirFile.listFiles()) {
-                deleteFile(file);
-            }
-        }
-
-        dirFile.delete();
     }
 }

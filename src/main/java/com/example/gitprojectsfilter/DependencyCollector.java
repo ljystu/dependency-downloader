@@ -4,9 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencsv.CSVWriter;
 import picocli.CommandLine;
-import com.example.gitprojectsfilter.Project;
 
-import javax.xml.stream.events.Comment;
 import java.io.*;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
@@ -20,6 +18,7 @@ public class DependencyCollector {
     private static HashMap<String, Set<String>> dependencyUsage;
     private static HashSet<String> set;
 
+    private static HashSet<String> largeProjects;
 
     @CommandLine.Option(names = {"-a",
             "--artifact"}, paramLabel = "ARTIFACT")
@@ -28,9 +27,9 @@ public class DependencyCollector {
 
     public static void main(String[] args) {
 
-        Constants.projectList = args[1];
-        List<Project> projects = readProjects(Constants.projectList);
+        List<Project> projects = readProjects(args[1]);
         jarUsage = new HashMap<>();
+        largeProjects = new HashSet<>();
         set = new HashSet<>();
         dependencyUsage = new HashMap<>();
 
@@ -75,9 +74,12 @@ public class DependencyCollector {
 //        String projectFolder = "/Users/ljystu/Desktop/projects/";
 //        String path = "/Users/ljystu/Desktop/projects/" + project.getName();
         try {
+
             String cloneCommand = "git clone " + project.getRepoUrl() + " " + project.getName();
+            System.out.println("git cloning " + project.getName());
             Process cloneProcess = Runtime.getRuntime().exec(cloneCommand, null, new File(Constants.projectFolder));
             cloneProcess.waitFor();
+            cloneProcess.destroy();
 
 //
 //            String cdCommand = "cd " + path;
@@ -202,40 +204,40 @@ public class DependencyCollector {
 
 
         System.out.println(rootPath + " dependency size:" + dependencies.size());
-        if (dependencies.size() == 0) {
-            errorFound = false;
-
-            try {
-//                switchBranch("git for-each-ref refs/tags --sort=-taggerdate --format '%(refname:short)' | head", rootPath);
-
-//                switchBranch("git for-each-ref --sort=-committerdate refs/heads/ --format='%(refname:short)' --count=1", rootPath);
-                String dependencyList = execCmd(" mvn dependency:list -T 4 ", rootPath);
-                if (dependencyList == null) {
-                    return true;
-                }
-                String[] lines = dependencyList.split("\n");
-                Pattern pattern = Pattern.compile("    (.*):(compile|runtime|test)");
-                Pattern errorPattern = Pattern.compile("(FAILURE|ERROR).*");
-
-
-                for (String line : lines) {
-                    if (line == null) continue;
-                    Matcher matcher = pattern.matcher(line);
-                    if (matcher.find()) {
-                        String info = matcher.group(1);
-                        dependencies.add(info);
-                    }
-                    Matcher errorMatcher = errorPattern.matcher(line);
-                    if (errorMatcher.find()) {
-                        errorFound = true;
-                    }
-
-                }
-                System.out.println(rootPath + " dependency size:" + dependencies.size());
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }
+//        if (dependencies.size() == 0) {
+//            errorFound = false;
+//
+//            try {
+////                switchBranch("git for-each-ref refs/tags --sort=-taggerdate --format '%(refname:short)' | head", rootPath);
+//
+////                switchBranch("git for-each-ref --sort=-committerdate refs/heads/ --format='%(refname:short)' --count=1", rootPath);
+//                String dependencyList = execCmd(" mvn dependency:list -T 4 ", rootPath);
+//                if (dependencyList == null) {
+//                    return true;
+//                }
+//                String[] lines = dependencyList.split("\n");
+//                Pattern pattern = Pattern.compile("    (.*):(compile|runtime|test)");
+//                Pattern errorPattern = Pattern.compile("(FAILURE|ERROR).*");
+//
+//
+//                for (String line : lines) {
+//                    if (line == null) continue;
+//                    Matcher matcher = pattern.matcher(line);
+//                    if (matcher.find()) {
+//                        String info = matcher.group(1);
+//                        dependencies.add(info);
+//                    }
+//                    Matcher errorMatcher = errorPattern.matcher(line);
+//                    if (errorMatcher.find()) {
+//                        errorFound = true;
+//                    }
+//
+//                }
+//                System.out.println(rootPath + " dependency size:" + dependencies.size());
+//            } catch (Exception e) {
+//                e.printStackTrace();
+//            }
+//        }
 //        dependencies.clear();
         if (dependencies.isEmpty()) {
             DownloadHelper.deleteFile(new File(rootPath));
@@ -253,6 +255,7 @@ public class DependencyCollector {
 
         describeProcess.waitFor();
         describeInput.close();
+
 
         if (describeOutput == null || describeOutput.startsWith("fatal")) {
             return true;
@@ -290,7 +293,7 @@ public class DependencyCollector {
 
     public static String execCmd(String cmd, String dir) {
         StringBuilder result = new StringBuilder();
-        String[] command = new String[]{"/bin/sh", "-c", "mvn dependency:list -T 4 | grep 'compile\\|test'"};
+        String[] command = new String[]{"/bin/sh", "-c", "mvn dependency:list -Dmaven.javadoc.skip=true -DincludeScope=runtime -T 4 | grep 'compile\\|test'"};
 
 //        String[] env = new String[]{"JAVA_HOME=" +
 //                Constants.JAVA_HOME};
@@ -305,15 +308,18 @@ public class DependencyCollector {
             ProcessBuilder processBuilder = new ProcessBuilder(command);
             processBuilder.directory(new File(dir));
             Process process = processBuilder.start();
-            boolean b = process.waitFor(10, TimeUnit.MINUTES);
-
+            boolean b = process.waitFor(30, TimeUnit.SECONDS);
+            System.out.println("mvn dependency list");
             BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(process.getInputStream()));
             String line;
             while ((line = bufferedReader.readLine()) != null) {
                 result.append(line).append("\n");
             }
             if (!b) {
-                System.out.println("error");
+                largeProjects.add(dir.substring(dir.lastIndexOf("/")));
+                System.out.println(dir + " TTL");
+                DownloadHelper.deleteFile(new File(dir));
+                result.setLength(0);
             }
             process.destroy();
         } catch (Exception e) {
