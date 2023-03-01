@@ -32,18 +32,18 @@ public class DependencyCollector {
         largeProjects = new HashSet<>();
         set = new HashSet<>();
         dependencyUsage = new HashMap<>();
-
-        for (Project p : projects) {
-            String folderName =
+        try {
+            for (Project p : projects) {
+                String folderName =
 //                    DownloadHelper.downloadAndUnzip(p);
-                    gitDownload(p);
-            if ("".equals(folderName)) continue;
-            if (!getJarToCoordMap(folderName)) {
-                set.add(folderName);
+                        gitDownload(p);
+                if ("".equals(folderName)) continue;
+                if (!getJarToCoordMap(folderName)) {
+                    set.add(folderName.substring(folderName.lastIndexOf("/") + 1));
+                }
+
             }
 
-        }
-        try {
             for (String large : largeProjects) {
                 System.out.println(large);
             }
@@ -85,12 +85,11 @@ public class DependencyCollector {
             boolean b = cloneProcess.waitFor(2, TimeUnit.MINUTES);
             cloneProcess.destroy();
             if (!b) {
-                largeProjects.add(path);
+                largeProjects.add(path.substring(path.lastIndexOf("/") + 1));
                 System.out.println("git " + path + " TTL");
-//                DownloadHelper.deleteFile(new File(path));
+                DownloadHelper.deleteFile(new File(path));
                 return "";
             }
-
 
 //
 //            String cdCommand = "cd " + path;
@@ -153,12 +152,14 @@ public class DependencyCollector {
             String[] data = {entry.getKey(), String.valueOf(entry.getValue())};
             outputwriter.writeNext(data);
         }
+        outputwriter.close();
 
         CSVWriter writer = new CSVWriter(new FileWriter(Constants.outputDependencyUsageCsv, true));
         for (String key : dependencyUsage.keySet()) {
             Set<String> record = dependencyUsage.get(key);
             String[] recordArray = new String[record.size()];
             recordArray = record.toArray(recordArray);
+//            String projectName = key.substring(key.lastIndexOf("/") + 1);
             writer.writeNext(new String[]{key, Arrays.toString(recordArray)});
         }
         writer.close();
@@ -186,12 +187,36 @@ public class DependencyCollector {
         System.out.println(rootPath);
         Set<String> dependencies = new HashSet<>();
         boolean errorFound = false;
+        errorFound = extractDependencies(rootPath, dependencies, errorFound);
+
+        System.out.println(rootPath + " dependency size:" + dependencies.size());
+
+        if (dependencies.size() == 0) {
+            errorFound = false;
+            try {
+                boolean switchBranch = switchBranch("git for-each-ref refs/tags --sort=-taggerdate --format '%(refname:short)' | head", rootPath);
+                if (switchBranch) {
+////                switchBranch("git for-each-ref --sort=-committerdate refs/heads/ --format='%(refname:short)' --count=1", rootPath);
+                    extractDependencies(rootPath, dependencies, errorFound);
+                    System.out.println(rootPath + " dependency size:" + dependencies.size());
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+        if (dependencies.isEmpty()) {
+            DownloadHelper.deleteFile(new File(rootPath));
+        } else {
+            extractCoordinate(rootPath, dependencies);
+        }
+        return errorFound;
+    }
+
+    private static boolean extractDependencies(String rootPath, Set<String> dependencies, boolean errorFound) {
         try {
 
             String dependencyList = execCmd(" mvn dependency:list -T 4｜", rootPath);
-            if (dependencyList == null) {
-                return true;
-            }
+
             String[] lines = dependencyList.split("\n");
             Pattern pattern = Pattern.compile("    (.*):(compile|runtime|test)");
             Pattern errorPattern = Pattern.compile("(FAILURE|ERROR).*");
@@ -212,51 +237,6 @@ public class DependencyCollector {
             }
         } catch (Exception e) {
             e.printStackTrace();
-        }
-
-
-        System.out.println(rootPath + " dependency size:" + dependencies.size());
-        if (dependencies.size() == 0) {
-            errorFound = false;
-
-            try {
-                boolean switchBranch = switchBranch("git for-each-ref refs/tags --sort=-taggerdate --format '%(refname:short)' | head", rootPath);
-                if (switchBranch) {
-
-//                switchBranch("git for-each-ref --sort=-committerdate refs/heads/ --format='%(refname:short)' --count=1", rootPath);
-                    String dependencyList = execCmd(" mvn dependency:list -T 4 ", rootPath);
-                    if (dependencyList == null) {
-                        return true;
-                    }
-                    String[] lines = dependencyList.split("\n");
-                    Pattern pattern = Pattern.compile("    (.*):(compile|runtime|test)");
-                    Pattern errorPattern = Pattern.compile("(FAILURE|ERROR).*");
-
-
-                    for (String line : lines) {
-                        if (line == null) continue;
-                        Matcher matcher = pattern.matcher(line);
-                        if (matcher.find()) {
-                            String info = matcher.group(1);
-                            dependencies.add(info);
-                        }
-                        Matcher errorMatcher = errorPattern.matcher(line);
-                        if (errorMatcher.find()) {
-                            errorFound = true;
-                        }
-
-                    }
-                    System.out.println(rootPath + " dependency size:" + dependencies.size());
-                }
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }
-        dependencies.clear();
-        if (dependencies.isEmpty()) {
-            DownloadHelper.deleteFile(new File(rootPath));
-        } else {
-            extractCoordinate(rootPath, dependencies);
         }
         return errorFound;
     }
@@ -334,7 +314,7 @@ public class DependencyCollector {
             boolean b = process.waitFor(2, TimeUnit.MINUTES);
 
             if (!b) {
-                largeProjects.add(dir.substring(dir.lastIndexOf("/")));
+                largeProjects.add(dir.substring(dir.lastIndexOf("/") + 1));
                 System.out.println(dir + " TTL");
 //                DownloadHelper.deleteFile(new File(dir));
                 process.destroy();
@@ -364,7 +344,8 @@ public class DependencyCollector {
             jarUsage.put(coordinate, jarUsage.getOrDefault(coordinate, 0) + 1);
             dependenciesUsed.add(coordinate);
         }
-        dependencyUsage.put(path, dependenciesUsed);
+        String projectName = path.substring(path.lastIndexOf("/") + 1);
+        dependencyUsage.put(projectName, dependenciesUsed);
 
     }
 
